@@ -420,7 +420,7 @@ impl TestState {
             // This test suite doesn't actually execute any wasm code, so ignore
             // all of these assertions.
             WastDirective::Register { .. }
-            | WastDirective::Invoke(_)
+            | WastDirective::Action(_)
             | WastDirective::AssertTrap { .. }
             | WastDirective::AssertReturn { .. }
             | WastDirective::AssertExhaustion { .. }

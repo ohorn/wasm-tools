@@ -46,7 +46,8 @@ impl Peek for WastDirectiveToken {
             || kw == "module"
             || kw == "component"
             || kw == "register"
-            || kw == "invoke")
+            || kw == "invoke"
+            || kw == "get")
     }
 
     fn display() -> &'static str {
@@ -77,7 +78,7 @@ pub enum WastDirective<'a> {
         name: &'a str,
         module: Option<Id<'a>>,
     },
-    Invoke(WastInvoke<'a>),
+    Action(WastAction<'a>),
     AssertTrap {
         span: Span,
         exec: WastExecute<'a>,
@@ -85,12 +86,12 @@ pub enum WastDirective<'a> {
     },
     AssertReturn {
         span: Span,
-        exec: WastExecute<'a>,
+        action: WastAction<'a>,
         results: Vec<WastRet<'a>>,
     },
     AssertExhaustion {
         span: Span,
-        call: WastInvoke<'a>,
+        action: WastAction<'a>,
         message: &'a str,
     },
     AssertUnlinkable {
@@ -100,7 +101,7 @@ pub enum WastDirective<'a> {
     },
     AssertException {
         span: Span,
-        exec: WastExecute<'a>,
+        action: WastAction<'a>,
     },
 }
 
@@ -120,7 +121,8 @@ impl WastDirective<'_> {
             | WastDirective::AssertUnlinkable { span, .. }
             | WastDirective::AssertInvalid { span, .. }
             | WastDirective::AssertException { span, .. } => *span,
-            WastDirective::Invoke(i) => i.span,
+            WastDirective::Action(WastAction::Invoke { span, .. }) => *span,
+            WastDirective::Action(WastAction::Get { span, .. }) => *span,
         }
     }
 }
@@ -151,8 +153,8 @@ impl<'a> Parse<'a> for WastDirective<'a> {
                 name: parser.parse()?,
                 module: parser.parse()?,
             })
-        } else if l.peek::<kw::invoke>()? {
-            Ok(WastDirective::Invoke(parser.parse()?))
+        } else if l.peek::<kw::invoke>()? || l.peek::<kw::get>()? {
+            Ok(WastDirective::Action(parser.parse()?))
         } else if l.peek::<kw::assert_trap>()? {
             let span = parser.parse::<kw::assert_trap>()?.0;
             Ok(WastDirective::AssertTrap {
@@ -162,21 +164,21 @@ impl<'a> Parse<'a> for WastDirective<'a> {
             })
         } else if l.peek::<kw::assert_return>()? {
             let span = parser.parse::<kw::assert_return>()?.0;
-            let exec = parser.parens(|p| p.parse())?;
+            let action = parser.parens(|p| p.parse())?;
             let mut results = Vec::new();
             while !parser.is_empty() {
                 results.push(parser.parens(|p| p.parse())?);
             }
             Ok(WastDirective::AssertReturn {
                 span,
-                exec,
+                action,
                 results,
             })
         } else if l.peek::<kw::assert_exhaustion>()? {
             let span = parser.parse::<kw::assert_exhaustion>()?.0;
             Ok(WastDirective::AssertExhaustion {
                 span,
-                call: parser.parens(|p| p.parse())?,
+                action: parser.parens(|p| p.parse())?,
                 message: parser.parse()?,
             })
         } else if l.peek::<kw::assert_unlinkable>()? {
@@ -190,7 +192,7 @@ impl<'a> Parse<'a> for WastDirective<'a> {
             let span = parser.parse::<kw::assert_exception>()?.0;
             Ok(WastDirective::AssertException {
                 span,
-                exec: parser.parens(|p| p.parse())?,
+                action: parser.parens(|p| p.parse())?,
             })
         } else {
             Err(l.error())
@@ -201,27 +203,17 @@ impl<'a> Parse<'a> for WastDirective<'a> {
 #[allow(missing_docs)]
 #[derive(Debug)]
 pub enum WastExecute<'a> {
-    Invoke(WastInvoke<'a>),
+    Action(WastAction<'a>),
     Wat(Wat<'a>),
-    Get {
-        module: Option<Id<'a>>,
-        global: &'a str,
-    },
 }
 
 impl<'a> Parse<'a> for WastExecute<'a> {
     fn parse(parser: Parser<'a>) -> Result<Self> {
         let mut l = parser.lookahead1();
-        if l.peek::<kw::invoke>()? {
-            Ok(WastExecute::Invoke(parser.parse()?))
+        if l.peek::<kw::invoke>()? || l.peek::<kw::get>()? {
+            Ok(WastExecute::Action(parser.parse()?))
         } else if l.peek::<kw::module>()? || l.peek::<kw::component>()? {
             Ok(WastExecute::Wat(parse_wat(parser)?))
-        } else if l.peek::<kw::get>()? {
-            parser.parse::<kw::get>()?;
-            Ok(WastExecute::Get {
-                module: parser.parse()?,
-                global: parser.parse()?,
-            })
         } else {
             Err(l.error())
         }
@@ -244,28 +236,50 @@ fn parse_wat(parser: Parser) -> Result<Wat> {
 
 #[allow(missing_docs)]
 #[derive(Debug)]
-pub struct WastInvoke<'a> {
-    pub span: Span,
-    pub module: Option<Id<'a>>,
-    pub name: &'a str,
-    pub args: Vec<WastArg<'a>>,
+/// An action which is either an `invoke` or a `get`.
+pub enum WastAction<'a> {
+    /// Invokes an exported function.
+    Invoke {
+        span: Span,
+        module: Option<Id<'a>>,
+        name: &'a str,
+        args: Vec<WastArg<'a>>,
+    },
+    /// Gets an exported global.
+    Get {
+        span: Span,
+        module: Option<Id<'a>>,
+        global: &'a str,
+    },
 }
 
-impl<'a> Parse<'a> for WastInvoke<'a> {
+impl<'a> Parse<'a> for WastAction<'a> {
     fn parse(parser: Parser<'a>) -> Result<Self> {
-        let span = parser.parse::<kw::invoke>()?.0;
-        let module = parser.parse()?;
-        let name = parser.parse()?;
-        let mut args = Vec::new();
-        while !parser.is_empty() {
-            args.push(parser.parens(|p| p.parse())?);
+        let mut l = parser.lookahead1();
+        if l.peek::<kw::invoke>()? {
+            let span = parser.parse::<kw::invoke>()?.0;
+            let module = parser.parse()?;
+            let name = parser.parse()?;
+            let mut args = Vec::new();
+            while !parser.is_empty() {
+                args.push(parser.parens(|p| p.parse())?);
+            }
+            Ok(WastAction::Invoke {
+                span,
+                module,
+                name,
+                args,
+            })
+        } else if l.peek::<kw::get>()? {
+            let span = parser.parse::<kw::get>()?.0;
+            Ok(WastAction::Get {
+                span,
+                module: parser.parse()?,
+                global: parser.parse()?,
+            })
+        } else {
+            Err(l.error())
         }
-        Ok(WastInvoke {
-            span,
-            module,
-            name,
-            args,
-        })
     }
 }
 
