@@ -266,7 +266,7 @@ impl<'a> JsonBuilder<'a> {
     }
 
     fn module_name(&self, s: &str) -> String {
-        s.to_string()
+        format!("${}", s)
     }
 
     fn emit_file(
@@ -471,19 +471,19 @@ impl<'a> JsonBuilder<'a> {
     }
 
     fn print_i8(&self, i: i8) -> String {
-        i.to_string()
+        (i as u8).to_string()
     }
 
     fn print_i16(&self, i: i16) -> String {
-        i.to_string()
+        (i as u16).to_string()
     }
 
     fn print_i32(&self, i: i32) -> String {
-        i.to_string()
+        (i as u32).to_string()
     }
 
     fn print_i64(&self, i: i64) -> String {
-        i.to_string()
+        (i as u64).to_string()
     }
 }
 
